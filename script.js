@@ -175,6 +175,7 @@ const networkEdges = [
   ['daejeon', 'incheon', 16, 4], ['daejeon', 'busan', 13, 2], ['incheon', 'busan', 14, 5], ['incheon', 'gwangju', 18, 1],
   ['busan', 'gwangju', 10, 3], ['busan', 'receiver', 23, 2], ['gwangju', 'receiver', 8, 4]
 ].map(([from, to, time, risk]) => ({ from, to, time, risk }));
+const defaultNetworkWeights = networkEdges.map(({ time, risk }) => ({ time, risk }));
 let routeState = { path: [], visited: [], result: null, mode: 'time' };
 function nodeById(id) { return networkNodes.find((node) => node.id === id); }
 function edgeKey(a, b) { return [a, b].sort().join('|'); }
@@ -204,6 +205,20 @@ function renderNetwork() {
   $('#networkViewport').innerHTML = `<svg class="network-svg" viewBox="0 0 820 390" aria-label="가중치 네트워크 그래프">${edges}${nodes}</svg>`;
 }
 function populateRouteSelects() { ['#routeStart', '#routeEnd'].forEach((selector) => { $(selector).innerHTML = networkNodes.map((node) => `<option value="${node.id}">${node.name} (${node.sub})</option>`).join(''); }); $('#routeStart').value = 'sender'; $('#routeEnd').value = 'receiver'; renderNetwork(); }
+function edgeName(edge) { return `${nodeById(edge.from).name} ↔ ${nodeById(edge.to).name}`; }
+function resetRouteView() { routeState = { path: [], visited: [], result: null, mode: $('#routeMode').value }; $('#routeResult').classList.add('hidden'); $('#simulateButton').classList.add('hidden'); $('#dijkstraSteps').innerHTML = '<li>가중치가 변경되었습니다. 다익스트라 경로를 다시 계산하세요.</li>'; renderNetwork(); }
+function renderWeightTable() {
+  $('#weightTableBody').innerHTML = networkEdges.map((edge, index) => `<tr><td>${edgeName(edge)}</td><td><input data-edge="${index}" data-weight="time" type="number" min="1" max="999" value="${edge.time}" aria-label="${edgeName(edge)} 전송 시간"></td><td><input data-edge="${index}" data-weight="risk" type="number" min="1" max="10" value="${edge.risk}" aria-label="${edgeName(edge)} 위험도"></td></tr>`).join('');
+  $('#weightTableBody').querySelectorAll('input').forEach((input) => input.addEventListener('change', () => { const value = Number(input.value), edge = networkEdges[Number(input.dataset.edge)], field = input.dataset.weight, max = field === 'risk' ? 10 : 999; edge[field] = Number.isFinite(value) ? Math.min(max, Math.max(1, Math.round(value))) : 1; input.value = edge[field]; resetRouteView(); }));
+}
+function compareRoutes() {
+  const start = $('#routeStart').value, end = $('#routeEnd').value;
+  if (start === end) return setStatus('#routeStatus', '출발 서버와 도착 서버는 다르게 선택하세요.', 'error');
+  const timeResult = dijkstra(start, end, 'time'), riskResult = dijkstra(start, end, 'risk');
+  const resultCard = (title, result, unit, extraClass = '') => `<div class="comparison-card ${extraClass}"><span>${title}</span><strong>${result.path.map((id) => nodeById(id).name).join(' → ')}</strong><small>총 비용: ${result.cost}${unit} · 방문 정점 ${result.visited.length}개</small></div>`;
+  $('#comparisonResult').innerHTML = resultCard('TIME / 최단 시간', timeResult, 'ms') + resultCard('RISK / 최소 위험도', riskResult, '점', 'risk');
+  setStatus('#routeStatus', '동일한 그래프에서 가중치 기준에 따라 두 최적 경로를 비교했습니다.', 'success');
+}
 function calculateRoute() {
   const start = $('#routeStart').value, end = $('#routeEnd').value, mode = $('#routeMode').value;
   if (start === end) return setStatus('#routeStatus', '출발 서버와 도착 서버는 다르게 선택하세요.', 'error');
@@ -223,5 +238,5 @@ $('#encryptedFile').addEventListener('change', (event) => { const file = event.t
 $('#encryptButton').addEventListener('click', encrypt); $('#decryptButton').addEventListener('click', decrypt);
 $('#downloadEnc').addEventListener('click', () => { if (encryptedPackage) download(encryptedPackage, 'secure-message.enc', 'application/octet-stream'); });
 $('#downloadRestored').addEventListener('click', () => { if (restoredFile) download(restoredFile.bytes, restoredFile.name, restoredFile.mime); });
-populateRouteSelects(); $('#routeButton').addEventListener('click', calculateRoute); $('#simulateButton').addEventListener('click', simulatePacket); ['#routeMode', '#routeStart', '#routeEnd'].forEach((selector) => $(selector).addEventListener('change', () => { routeState = { path: [], visited: [], result: null, mode: $('#routeMode').value }; renderNetwork(); }));
+populateRouteSelects(); renderWeightTable(); $('#routeButton').addEventListener('click', calculateRoute); $('#simulateButton').addEventListener('click', simulatePacket); $('#compareRoutes').addEventListener('click', compareRoutes); $('#resetWeights').addEventListener('click', () => { networkEdges.forEach((edge, index) => Object.assign(edge, defaultNetworkWeights[index])); renderWeightTable(); resetRouteView(); setStatus('#routeStatus', '모든 간선 가중치를 기본값으로 복원했습니다.', 'success'); }); ['#routeMode', '#routeStart', '#routeEnd'].forEach((selector) => $(selector).addEventListener('change', resetRouteView));
 window.addEventListener('resize', () => { if ($('#analysis').classList.contains('active')) renderAnalysis(); });
