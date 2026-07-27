@@ -4,6 +4,8 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 // 브라우저 메모리에서 원본·압축본·암호문을 함께 다루므로 25MB로 제한합니다.
 const MAX_SIZE = 25 * 1024 * 1024;
+// Supabase Project Settings > API의 URL과 anon public key만 넣으세요. service_role 키는 절대 넣지 마세요.
+const SUPABASE_CONFIG = { url: '', anonKey: '', bucket: 'encrypted-packages' };
 let encryptedPackage = null;
 let restoredFile = null;
 let analysisData = null;
@@ -12,6 +14,13 @@ function bytesLabel(size) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / 1024 / 1024).toFixed(2)} MB`;
+}
+function supabaseReady() { return SUPABASE_CONFIG.url.startsWith('https://') && SUPABASE_CONFIG.anonKey.length > 20; }
+function supabaseHeaders(extra = {}) { return { apikey: SUPABASE_CONFIG.anonKey, Authorization: `Bearer ${SUPABASE_CONFIG.anonKey}`, ...extra }; }
+async function supabaseRequest(path, options = {}) {
+  const response = await fetch(`${SUPABASE_CONFIG.url}${path}`, { ...options, headers: supabaseHeaders(options.headers) });
+  if (!response.ok) { let detail = ''; try { detail = (await response.json()).message || ''; } catch { detail = await response.text(); } throw new Error(detail || `서버 요청에 실패했습니다. (${response.status})`); }
+  return response;
 }
 
 function setStatus(id, message, kind = '') {
@@ -119,11 +128,44 @@ async function encrypt() {
     encryptedPackage = makePackage({ ...source, size: source.bytes.length }, frequencies, compressed.bitLength, encrypted, integrity); setProcess('#processReady', 'done'); updateSteps($('#encrypt .steps'), 4);
     const ratio = (1 - compressed.packed.length / source.bytes.length) * 100;
     $('#compressionText').textContent = `${bytesLabel(source.bytes.length)} → ${bytesLabel(compressed.packed.length)} (${ratio >= 0 ? ratio.toFixed(1) : '+' + Math.abs(ratio).toFixed(1)}%)`;
-    $('#packageSize').textContent = bytesLabel(encryptedPackage.length); $('#resultBox').classList.remove('hidden');
+    $('#packageSize').textContent = bytesLabel(encryptedPackage.length); $('#resultBox').classList.remove('hidden'); $('#uploadBox').classList.remove('hidden');
     analysisData = { original: source.bytes, encrypted, simple: xorBytes(compressed.packed, encoder.encode(keyText)), hashed: encrypted }; renderAnalysis();
     setStatus('#encryptStatus', '완료! .enc 파일을 다운로드해 안전하게 전달하세요.', 'success');
   } catch (error) { setStatus('#encryptStatus', error.message, 'error'); }
   button.disabled = false;
+}
+
+function makeShareId() { return crypto.randomUUID(); }
+function formatTime(value) { return new Intl.DateTimeFormat('ko-KR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)); }
+async function uploadEncryptedPackage() {
+  if (!encryptedPackage) return setStatus('#uploadStatus', '먼저 암호화를 완료하세요.', 'error');
+  if (!supabaseReady()) return setStatus('#uploadStatus', 'Supabase 설정이 필요합니다. supabase-setup.md를 확인하세요.', 'error');
+  const button = $('#uploadEnc'), id = makeShareId(), path = `${id}.enc`, hours = Number($('#expiryHours').value), senderName = $('#senderName').value.trim() || '익명';
+  button.disabled = true; setStatus('#uploadStatus', '암호문 패키지를 서버에 업로드하는 중...');
+  try {
+    await supabaseRequest(`/storage/v1/object/${SUPABASE_CONFIG.bucket}/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'x-upsert': 'false' }, body: encryptedPackage });
+    const metadata = { id, sender_name: senderName, original_name: 'secure-message.enc', package_size: encryptedPackage.length, storage_path: path, expires_at: new Date(Date.now() + hours * 3600000).toISOString() };
+    try { await supabaseRequest('/rest/v1/secure_messages', { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' }, body: JSON.stringify(metadata) }); } catch (error) { await supabaseRequest(`/storage/v1/object/${SUPABASE_CONFIG.bucket}/${path}`, { method: 'DELETE' }).catch(() => {}); throw error; }
+    setStatus('#uploadStatus', `업로드 완료. 공유 ID: ${id.slice(0, 8)} · ${metadata.expires_at.slice(0, 10)}까지 보관`, 'success');
+  } catch (error) { setStatus('#uploadStatus', error.message, 'error'); }
+  button.disabled = false;
+}
+async function loadInbox() {
+  if (!supabaseReady()) return setStatus('#inboxStatus', 'Supabase URL과 anon public key를 script.js에 설정하세요. 설정 방법은 supabase-setup.md에 있습니다.', 'error');
+  setStatus('#inboxStatus', '공유된 암호문을 불러오는 중...'); $('#inboxList').innerHTML = '<div class="inbox-empty">암호문 목록을 불러오는 중입니다...</div>';
+  try {
+    const response = await supabaseRequest('/rest/v1/secure_messages?select=id,sender_name,original_name,package_size,storage_path,expires_at,created_at&order=created_at.desc'); const messages = await response.json();
+    if (!messages.length) { $('#inboxList').innerHTML = '<div class="inbox-empty">현재 보관된 암호문이 없습니다.</div>'; return setStatus('#inboxStatus', '만료되지 않은 암호문 0개', 'success'); }
+    $('#inboxList').innerHTML = messages.map((message) => `<div class="inbox-item"><div><strong>${escapeHtml(message.original_name)}</strong><small>보낸 사람: ${escapeHtml(message.sender_name)} · ID ${message.id.slice(0, 8)}</small></div><span>${bytesLabel(message.package_size)}</span><span>만료: ${formatTime(message.expires_at)}</span><button class="secondary-button" data-download-id="${message.id}">받아서 복호화 <b>↓</b></button></div>`).join('');
+    $('#inboxList').querySelectorAll('[data-download-id]').forEach((button) => button.addEventListener('click', () => downloadSharedPackage(messages.find((message) => message.id === button.dataset.downloadId), button)));
+    setStatus('#inboxStatus', `만료되지 않은 암호문 ${messages.length}개를 불러왔습니다.`, 'success');
+  } catch (error) { $('#inboxList').innerHTML = '<div class="inbox-empty">보관함을 불러오지 못했습니다.</div>'; setStatus('#inboxStatus', error.message, 'error'); }
+}
+async function downloadSharedPackage(message, button) {
+  button.disabled = true; button.textContent = '가져오는 중...';
+  try {
+    const response = await supabaseRequest(`/storage/v1/object/${SUPABASE_CONFIG.bucket}/${message.storage_path}`); const blob = await response.blob(); const file = new File([blob], message.original_name, { type: 'application/octet-stream' }); const transfer = new DataTransfer(); transfer.items.add(file); $('#encryptedFile').files = transfer.files; $('#encryptedMeta').textContent = `${message.original_name} · ${bytesLabel(file.size)} · 공유 보관함에서 수신`; document.querySelector('[data-tab="decrypt"]').click(); setStatus('#decryptStatus', '공유 보관함의 암호문을 불러왔습니다. 비밀 키를 입력해 복호화하세요.', 'success');
+  } catch (error) { setStatus('#inboxStatus', error.message, 'error'); button.disabled = false; button.innerHTML = '받아서 복호화 <b>↓</b>'; }
 }
 
 function renderTree(root, codes) {
@@ -231,12 +273,13 @@ function simulatePacket() {
   const packet = document.createElementNS('http://www.w3.org/2000/svg', 'circle'); packet.setAttribute('class', 'packet'); packet.setAttribute('r', '9'); packet.innerHTML = `<animateMotion dur="3s" repeatCount="1" path="M ${routeState.path.map((id) => { const node = nodeById(id); return `${node.x} ${node.y}`; }).join(' L ')}"/>`; svg.append(packet); setStatus('#routeStatus', encryptedPackage ? '암호화된 .enc 패킷이 최적 경로를 따라 이동합니다. 원문은 중계 서버에 표시되지 않습니다.' : '경로 시뮬레이션입니다. 암호화 후에는 .enc 패킷 전송으로 연결됩니다.', 'success');
 }
 
-document.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => { document.querySelectorAll('.tab,.panel').forEach((item) => item.classList.remove('active')); tab.classList.add('active'); $(`#${tab.dataset.tab}`).classList.add('active'); if (tab.dataset.tab === 'analysis') renderAnalysis(); }));
+document.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => { document.querySelectorAll('.tab,.panel').forEach((item) => item.classList.remove('active')); tab.classList.add('active'); $(`#${tab.dataset.tab}`).classList.add('active'); if (tab.dataset.tab === 'analysis') renderAnalysis(); if (tab.dataset.tab === 'inbox') loadInbox(); }));
 document.querySelectorAll('[data-open-tab]').forEach((button) => button.addEventListener('click', () => document.querySelector(`[data-tab="${button.dataset.openTab}"]`).click()));
 $('#sourceFile').addEventListener('change', (event) => { const file = event.target.files[0]; $('#sourceMeta').textContent = file ? `${file.name} · ${bytesLabel(file.size)}${file.size > MAX_SIZE ? ' · 크기 초과' : ''}` : '텍스트 입력을 기다리는 중'; });
 $('#encryptedFile').addEventListener('change', (event) => { const file = event.target.files[0]; $('#encryptedMeta').textContent = file ? `${file.name} · ${bytesLabel(file.size)}` : '보안 파일을 기다리는 중'; });
 $('#encryptButton').addEventListener('click', encrypt); $('#decryptButton').addEventListener('click', decrypt);
 $('#downloadEnc').addEventListener('click', () => { if (encryptedPackage) download(encryptedPackage, 'secure-message.enc', 'application/octet-stream'); });
 $('#downloadRestored').addEventListener('click', () => { if (restoredFile) download(restoredFile.bytes, restoredFile.name, restoredFile.mime); });
+$('#uploadEnc').addEventListener('click', uploadEncryptedPackage); $('#refreshInbox').addEventListener('click', loadInbox); $('#openInbox').addEventListener('click', () => document.querySelector('[data-tab="inbox"]').click());
 populateRouteSelects(); renderWeightTable(); $('#routeButton').addEventListener('click', calculateRoute); $('#simulateButton').addEventListener('click', simulatePacket); $('#compareRoutes').addEventListener('click', compareRoutes); $('#resetWeights').addEventListener('click', () => { networkEdges.forEach((edge, index) => Object.assign(edge, defaultNetworkWeights[index])); renderWeightTable(); resetRouteView(); setStatus('#routeStatus', '모든 간선 가중치를 기본값으로 복원했습니다.', 'success'); }); ['#routeMode', '#routeStart', '#routeEnd'].forEach((selector) => $(selector).addEventListener('change', resetRouteView));
 window.addEventListener('resize', () => { if ($('#analysis').classList.contains('active')) renderAnalysis(); });

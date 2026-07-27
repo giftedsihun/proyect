@@ -32,6 +32,7 @@
       <button class="tab" data-tab="decrypt">02 <strong>복호화</strong></button>
       <button class="tab" data-tab="route">03 <strong>전송 경로</strong></button>
       <button class="tab" data-tab="analysis">04 <strong>보안 분석</strong></button>
+      <button class="tab" data-tab="inbox">05 <strong>공유 보관함</strong></button>
     </nav>
 
     <section id="encrypt" class="panel active">
@@ -69,6 +70,7 @@
             <div><span>PACKAGE SIZE</span><strong id="packageSize">-</strong></div>
             <button id="downloadEnc" class="secondary-button">.enc 다운로드 <b>↓</b></button>
           </div>
+          <div id="uploadBox" class="upload-box hidden"><div><span>SERVER TRANSFER / CIPHERTEXT ONLY</span><strong>암호문을 공유 보관함에 올리기</strong><p>원본과 비밀 키는 이 브라우저를 벗어나지 않습니다.</p></div><label>표시 이름<input id="senderName" maxlength="24" placeholder="익명 (선택)"></label><label>보관 시간<select id="expiryHours"><option value="24">24시간</option><option value="72">3일</option><option value="168">7일</option></select></label><button id="uploadEnc" class="secondary-button">서버에 암호문 업로드 <b>↑</b></button><p id="uploadStatus" class="status">암호화 후 업로드할 수 있습니다.</p></div>
         </article>
       </div>
       <article class="card tree-card">
@@ -89,6 +91,7 @@
           <input id="decryptKey" type="password" autocomplete="current-password" placeholder="암호화할 때 사용한 키">
           <button id="decryptButton" class="primary-button"><span>복호화 및 복원</span><b>→</b></button>
           <p id="decryptStatus" class="status" aria-live="polite">동일한 키가 있어야 원본을 복원할 수 있습니다.</p>
+          <div class="inbox-link"><button id="openInbox" class="text-button">공유 보관함에서 암호문 받기 →</button></div>
         </article>
         <article class="card recovery-card">
           <div class="card-heading"><span class="section-index">R</span><div><h2>복원 결과</h2><p>무결성 검증을 통과한 원본만 제공합니다.</p></div></div>
@@ -97,6 +100,12 @@
         </article>
       </div>
       <aside class="xor-note"><b>BOOLEAN ALGEBRA / XOR의 자기역원 성질</b><span>A ⊕ K ⊕ K = A</span><p>같은 키로 XOR 연산을 한 번 더 하면 키가 상쇄되어 원래 압축 데이터가 복원됩니다.</p></aside>
+    </section>
+
+    <section id="inbox" class="panel">
+      <div class="route-intro"><p class="eyebrow">CIPHERTEXT STORAGE / SUPABASE</p><h2>공유된 <em>암호문 보관함</em>입니다.</h2><p>서버에는 암호화된 `.enc` 파일과 최소 메타데이터만 저장됩니다. 올바른 비밀 키가 있어야만 복호화할 수 있습니다.</p></div>
+      <article class="card inbox-card"><div class="card-heading"><span class="section-index">I</span><div><h2>받은 암호문</h2><p>만료되지 않은 암호문 패키지를 선택해 이 브라우저로 가져옵니다.</p></div><button id="refreshInbox" class="text-button">새로 고침</button></div><p id="inboxStatus" class="status">Supabase 연결을 설정한 뒤 보관함을 불러오세요.</p><div id="inboxList" class="inbox-list"><div class="inbox-empty">암호문 보관함을 불러오면 공유된 패키지가 표시됩니다.</div></div></article>
+      <aside class="graph-note"><b>개인정보 보호</b><p>표시 이름은 선택 사항이며 기본값은 익명입니다. 서버는 원본 파일과 비밀 키를 저장하거나 복호화하지 않습니다.</p></aside>
     </section>
 
     <section id="route" class="panel">
