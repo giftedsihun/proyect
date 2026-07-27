@@ -5,7 +5,7 @@ const decoder = new TextDecoder();
 // 브라우저 메모리에서 원본·압축본·암호문을 함께 다루므로 25MB로 제한합니다.
 const MAX_SIZE = 25 * 1024 * 1024;
 // Supabase Project Settings > API의 URL과 anon public key만 넣으세요. service_role 키는 절대 넣지 마세요.
-const SUPABASE_CONFIG = { url: '', anonKey: '', bucket: 'encrypted-packages' };
+const SUPABASE_CONFIG = { url: 'https://jucjidicqkoomcismvjs.supabase.co', anonKey: 'sb_publishable_pcAOkT6I2k4JXkMMRa7YZg_IcOUgzl_', bucket: 'encrypted-packages' };
 let encryptedPackage = null;
 let restoredFile = null;
 let analysisData = null;
