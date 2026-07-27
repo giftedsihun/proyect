@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="허프만 코딩과 XOR 암호화를 체험하는 클라이언트 전용 보안 통신 프로그램">
+  <title>Secure Message | 이산수학 보안 통신</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="grid-noise"></div>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Secure Message 홈">
+      <span class="brand-mark">S</span>
+      <span>SECURE<span>MESSAGE</span></span>
+    </a>
+    <p class="header-status"><i></i> CLIENT-SIDE PROTECTION ACTIVE</p>
+  </header>
+
+  <main id="top" class="shell">
+    <section class="hero">
+      <p class="eyebrow">DISCRETE MATHEMATICS LAB / 01</p>
+      <h1>메시지를 <em>수학적으로</em><br>안전하게 전송하세요.</h1>
+      <p>파일은 서버로 전송되지 않습니다. 이 브라우저 안에서 허프만 압축과 SHA-256 기반 XOR 암호화가 모두 이루어집니다.</p>
+      <div class="concept-pills">
+        <span>Tree · Huffman Coding</span><span>Boolean Algebra · XOR</span><span>Graph · Byte Distribution</span>
+      </div>
+    </section>
+
+    <nav class="tabs" aria-label="기능 화면">
+      <button class="tab active" data-tab="encrypt">01 <strong>암호화</strong></button>
+      <button class="tab" data-tab="decrypt">02 <strong>복호화</strong></button>
+      <button class="tab" data-tab="route">03 <strong>전송 경로</strong></button>
+      <button class="tab" data-tab="analysis">04 <strong>보안 분석</strong></button>
+    </nav>
+
+    <section id="encrypt" class="panel active">
+      <div class="steps" aria-label="암호화 진행 단계">
+        <div class="step active"><b>01</b><span>입력</span></div><div class="step-line"></div>
+        <div class="step"><b>02</b><span>압축</span></div><div class="step-line"></div>
+        <div class="step"><b>03</b><span>암호화</span></div><div class="step-line"></div>
+        <div class="step"><b>04</b><span>전송 준비</span></div>
+      </div>
+      <div class="work-grid">
+        <article class="card input-card">
+          <div class="card-heading"><span class="section-index">A</span><div><h2>보낼 데이터</h2><p>텍스트를 입력하거나 파일 하나를 선택하세요.</p></div></div>
+          <label class="field-label" for="messageInput">텍스트 메시지</label>
+          <textarea id="messageInput" maxlength="500000" placeholder="안전하게 전송할 메시지를 입력하세요..."></textarea>
+          <div class="or-divider"><span>OR</span></div>
+          <label class="file-drop" for="sourceFile"><input id="sourceFile" type="file"><span class="file-icon">+</span><span><strong>파일 선택</strong><small>최대 25MB · 텍스트 입력보다 우선합니다</small></span></label>
+          <p id="sourceMeta" class="small-status">텍스트 입력을 기다리는 중</p>
+          <label class="field-label" for="encryptKey">비밀 키 <span class="tip" data-tip="키는 SHA-256 해시로 32바이트(256비트)까지 확장됩니다.">?</span></label>
+          <input id="encryptKey" type="password" autocomplete="new-password" placeholder="예: KIM">
+          <button id="encryptButton" class="primary-button"><span>암호화 시작</span><b>→</b></button>
+          <p id="encryptStatus" class="status" aria-live="polite">준비 완료. 키와 데이터를 입력하세요.</p>
+        </article>
+
+        <article class="card process-card">
+          <div class="card-heading"><span class="section-index">B</span><div><h2>처리 현황</h2><p>이산수학 개념이 데이터에 적용됩니다.</p></div></div>
+          <div class="process-list">
+            <div id="processHuffman" class="process-item"><span>01</span><div><strong>허프만 코딩</strong><small>빈도 기반 접두어 없는 이진 코드</small></div><i>○</i></div>
+            <div id="processHash" class="process-item"><span>02</span><div><strong>SHA-256 키 확장</strong><small>입력 키 → 256비트 키</small></div><i>○</i></div>
+            <div id="processXor" class="process-item"><span>03</span><div><strong>XOR 암호화</strong><small>압축 데이터 ⊕ 확장 키</small></div><i>○</i></div>
+            <div id="processReady" class="process-item"><span>04</span><div><strong>전송 패키지 생성</strong><small>.enc 컨테이너 저장</small></div><i>○</i></div>
+          </div>
+          <div id="hashDisplay" class="hash-display"><span>KEY DERIVATION</span><code>입력 키를 기다리는 중</code></div>
+          <div id="resultBox" class="result-box hidden">
+            <div><span>COMPRESSION</span><strong id="compressionText">-</strong></div>
+            <div><span>PACKAGE SIZE</span><strong id="packageSize">-</strong></div>
+            <button id="downloadEnc" class="secondary-button">.enc 다운로드 <b>↓</b></button>
+          </div>
+        </article>
+      </div>
+      <article class="card tree-card">
+        <div class="card-heading tree-heading"><span class="section-index">T</span><div><h2>허프만 트리 <span class="tip" data-tip="자주 등장하는 바이트에는 짧은 코드를, 드문 바이트에는 긴 코드를 부여하는 이진 트리입니다.">?</span></h2><p>간선의 0과 1을 따라가면 각 바이트의 prefix-free 코드가 됩니다.</p></div><span id="treeNote" class="tree-note">암호화 후 트리가 여기에 표시됩니다.</span></div>
+        <div id="treeViewport" class="tree-viewport"><div class="tree-empty">FREQUENCY → PRIORITY QUEUE → HUFFMAN TREE</div></div>
+        <div id="codeLegend" class="code-legend"></div>
+      </article>
+    </section>
+
+    <section id="decrypt" class="panel">
+      <div class="steps decrypt-steps"><div class="step active"><b>01</b><span>파일 선택</span></div><div class="step-line"></div><div class="step"><b>02</b><span>XOR 복호화</span></div><div class="step-line"></div><div class="step"><b>03</b><span>압축 해제</span></div><div class="step-line"></div><div class="step"><b>04</b><span>원본 복원</span></div></div>
+      <div class="work-grid">
+        <article class="card input-card">
+          <div class="card-heading"><span class="section-index">D</span><div><h2>받은 보안 파일</h2><p>Secure Message에서 만든 .enc 파일을 선택하세요.</p></div></div>
+          <label class="file-drop tall" for="encryptedFile"><input id="encryptedFile" type="file" accept=".enc,application/octet-stream"><span class="file-icon">↓</span><span><strong>.enc 파일 선택</strong><small>최대 25MB 원본 기준</small></span></label>
+          <p id="encryptedMeta" class="small-status">보안 파일을 기다리는 중</p>
+          <label class="field-label" for="decryptKey">비밀 키</label>
+          <input id="decryptKey" type="password" autocomplete="current-password" placeholder="암호화할 때 사용한 키">
+          <button id="decryptButton" class="primary-button"><span>복호화 및 복원</span><b>→</b></button>
+          <p id="decryptStatus" class="status" aria-live="polite">동일한 키가 있어야 원본을 복원할 수 있습니다.</p>
+        </article>
+        <article class="card recovery-card">
+          <div class="card-heading"><span class="section-index">R</span><div><h2>복원 결과</h2><p>무결성 검증을 통과한 원본만 제공합니다.</p></div></div>
+          <div id="recoveryEmpty" class="recovery-empty"><span>⌁</span><strong>복원 대기 중</strong><p>올바른 키로 복호화하면<br>원본 데이터가 나타납니다.</p></div>
+          <div id="recoveryResult" class="hidden"><div id="restoredInfo" class="restored-info"></div><pre id="restoredText"></pre><button id="downloadRestored" class="secondary-button">원본 파일 다운로드 <b>↓</b></button></div>
+        </article>
+      </div>
+      <aside class="xor-note"><b>BOOLEAN ALGEBRA / XOR의 자기역원 성질</b><span>A ⊕ K ⊕ K = A</span><p>같은 키로 XOR 연산을 한 번 더 하면 키가 상쇄되어 원래 압축 데이터가 복원됩니다.</p></aside>
+    </section>
+
+    <section id="route" class="panel">
+      <div class="route-intro"><p class="eyebrow">WEIGHTED GRAPH / DIJKSTRA ALGORITHM</p><h2>암호문이 갈 <em>최적의 경로</em>를 찾습니다.</h2><p>중계 서버는 정점, 서버 사이 연결은 간선입니다. 간선의 가중치를 전송 시간 또는 위험도로 두고 다익스트라 알고리즘이 최적 경로를 계산합니다.</p></div>
+      <div class="route-controls card">
+        <div class="route-control-heading"><span class="section-index">G</span><div><h3>전송 네트워크 모델</h3><p>정점 = 서버 · 간선 = 네트워크 연결 · 가중치 = 시간 또는 위험도</p></div></div>
+        <div class="route-form">
+          <label>최적화 기준<select id="routeMode"><option value="time">최단 시간 (ms)</option><option value="risk">최소 위험도 (점)</option></select></label>
+          <label>출발 서버<select id="routeStart"></select></label>
+          <label>도착 서버<select id="routeEnd"></select></label>
+          <button id="routeButton" class="primary-button"><span>다익스트라 경로 계산</span><b>→</b></button>
+        </div>
+        <p id="routeStatus" class="status">가중치 기준을 선택하고 최적 경로를 계산하세요.</p>
+      </div>
+      <div class="route-grid">
+        <article class="card network-card"><div class="card-heading"><span class="section-index">N</span><div><h2>중계 서버 그래프 <span class="tip" data-tip="선 위 숫자는 선택한 기준의 가중치입니다. 다익스트라는 가중치 합이 가장 작은 경로를 찾습니다.">?</span></h2><p>청록색 선은 최종 선택된 경로입니다.</p></div></div><div id="networkViewport" class="network-viewport"></div><div class="network-key"><span><i class="edge-normal"></i>연결 간선</span><span><i class="edge-route"></i>최적 경로</span><span><i class="node-visited"></i>탐색 완료</span></div></article>
+        <article class="card algorithm-card"><div class="card-heading"><span class="section-index">A</span><div><h2>다익스트라 진행 기록</h2><p><code>dist[v] = min(dist[v], dist[u] + w(u,v))</code></p></div></div><ol id="dijkstraSteps" class="dijkstra-steps"><li>경로 계산을 시작하면 정점 선택과 거리 갱신 과정이 표시됩니다.</li></ol><div id="routeResult" class="route-result hidden"></div><button id="simulateButton" class="secondary-button hidden">암호문 전송 시뮬레이션 <b>→</b></button></article>
+      </div>
+      <aside class="graph-note"><b>왜 다익스트라인가?</b><p>모든 간선의 가중치가 0 이상일 때, 아직 방문하지 않은 정점 중 현재 비용이 가장 작은 정점을 확정하는 방식으로 출발지부터 각 서버까지의 최소 비용을 구할 수 있습니다.</p></aside>
+    </section>
+
+    <section id="analysis" class="panel">
+      <div class="analysis-intro"><p class="eyebrow">GRAPH THEORY / BYTE FREQUENCY</p><h2>데이터의 흔적을 <em>분포 그래프</em>로 확인합니다.</h2><p>암호화 전후 및 키 생성 방식에 따른 바이트 값(0~255)의 출현 빈도를 비교합니다.</p></div>
+      <div id="analysisEmpty" class="analysis-empty">먼저 <button data-open-tab="encrypt">암호화</button>를 실행해 분석 데이터를 생성하세요.</div>
+      <div id="analysisContent" class="hidden">
+        <div class="chart-grid"><article class="card chart-card"><div class="chart-title"><span>01</span><h3>원본 vs 암호문</h3></div><canvas id="mainDistribution"></canvas><p>원본의 규칙적인 분포가 암호화 후 넓게 분산되는지 비교합니다.</p></article><article class="card chart-card"><div class="chart-title"><span>02</span><h3>키 반복 방식 비교</h3></div><canvas id="keyDistribution"></canvas><p>짧은 키의 단순 반복은 주기적 패턴을 남길 수 있습니다.</p></article></div>
+        <article class="security-explanation"><div><b>WHY HASH THE KEY?</b><h3>짧은 키를 그대로 반복하지 않습니다.</h3></div><p>단순 반복 키는 같은 위치마다 같은 XOR 값이 적용되어 구조적 흔적을 남깁니다. SHA-256 해시는 입력을 32바이트 키 재료로 바꿔 반복 주기를 길게 합니다. 단, 짧은 비밀번호 자체의 추측 가능성을 없애는 것은 아니며 이 구현은 XOR 원리 학습용입니다.</p></article>
+        <article class="case-study"><p class="eyebrow">REAL-WORLD CONNECTIONS</p><h2>교과 개념이 실제 기술에서 쓰이는 곳</h2><div class="case-grid"><div><b>01 / 허프만 트리</b><h3>ZIP · PNG 압축</h3><p>자주 나타나는 데이터를 짧게 표현해 저장 공간과 전송량을 줄이는 무손실 압축의 핵심 원리입니다.</p></div><div><b>02 / XOR 연산</b><h3>스트림 암호의 기초</h3><p>키 스트림과 데이터를 XOR해 기밀성을 만드는 비트 연산입니다. 이 프로그램은 원리를 학습하는 교육용 구현입니다.</p></div><div><b>03 / 다익스트라</b><h3>내비게이션 · 인터넷 라우팅</h3><p>도로의 시간 또는 네트워크 연결 비용을 더해 가장 비용이 작은 경로를 찾는 데 사용됩니다.</p></div></div><p class="education-note">보안 한계 안내: SHA-256으로 만든 32바이트 키를 반복 XOR하는 방식은 이산수학 학습용입니다. 실제 서비스는 매 전송마다 다른 nonce/IV와 AES-GCM 같은 검증된 인증 암호를 사용해야 합니다.</p></article>
+      </div>
+    </section>
+  </main>
+  <footer>SECURE MESSAGE · ALL PROCESSING STAYS IN YOUR BROWSER · DISCRETE MATHEMATICS PROJECT</footer>
+  <script src="script.js"></script>
+</body>
+</html>
