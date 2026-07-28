@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="허프만 코딩과 XOR 암호화를 체험하는 클라이언트 전용 보안 통신 프로그램">
+  <meta name="description" content="허프만 코딩, AES-GCM, XOR 학습 모드를 체험하는 브라우저 기반 보안 통신 프로그램">
   <title>Secure Message | 이산수학 보안 통신</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -21,7 +21,7 @@
     <section class="hero">
       <p class="eyebrow">DISCRETE MATHEMATICS LAB / 01</p>
       <h1>메시지를 <em>수학적으로</em><br>안전하게 전송하세요.</h1>
-      <p>파일은 서버로 전송되지 않습니다. 이 브라우저 안에서 허프만 압축과 SHA-256 기반 XOR 암호화가 모두 이루어집니다.</p>
+      <p>공유 기능을 사용하지 않으면 데이터는 이 브라우저 안에만 머뭅니다. 기본 모드는 PBKDF2와 AES-GCM으로 암호화하며, XOR은 학습 비교용으로 제공합니다.</p>
       <div class="concept-pills">
         <span>Tree · Huffman Coding</span><span>Boolean Algebra · XOR</span><span>Graph · Byte Distribution</span>
       </div>
@@ -30,9 +30,8 @@
     <nav class="tabs" aria-label="기능 화면">
       <button class="tab active" data-tab="encrypt">01 <strong>암호화</strong></button>
       <button class="tab" data-tab="decrypt">02 <strong>복호화</strong></button>
-      <button class="tab" data-tab="route">03 <strong>전송 경로</strong></button>
-      <button class="tab" data-tab="analysis">04 <strong>보안 분석</strong></button>
-      <button class="tab" data-tab="inbox">05 <strong>공유 보관함</strong></button>
+      <button class="tab" data-tab="analysis">03 <strong>보안 분석</strong></button>
+      <button class="tab" data-tab="inbox">04 <strong>공유 보관함</strong></button>
     </nav>
 
     <section id="encrypt" class="panel active">
@@ -50,8 +49,12 @@
           <div class="or-divider"><span>OR</span></div>
           <label class="file-drop" for="sourceFile"><input id="sourceFile" type="file"><span class="file-icon">+</span><span><strong>파일 선택</strong><small>최대 25MB · 텍스트 입력보다 우선합니다</small></span></label>
           <p id="sourceMeta" class="small-status">텍스트 입력을 기다리는 중</p>
-          <label class="field-label" for="encryptKey">비밀 키 <span class="tip" data-tip="키는 SHA-256 해시로 32바이트(256비트)까지 확장됩니다.">?</span></label>
+          <label class="field-label" for="encryptionMode">암호화 방식</label>
+          <select id="encryptionMode" class="crypto-select"><option value="aes">권장: AES-256-GCM + PBKDF2</option><option value="xor">학습용: SHA-256 반복 XOR (안전하지 않음)</option></select>
+          <p id="modeNotice" class="mode-notice"><b>권장 모드</b> 매 암호화마다 새 salt와 IV를 만들고, AES-GCM으로 암호화와 변조 검증을 함께 수행합니다.</p>
+          <label class="field-label" for="encryptKey">비밀 키 <span class="tip" data-tip="AES 모드는 PBKDF2-SHA-256 250,000회로 키를 유도합니다. 짧은 키 대신 긴 암호문을 사용하세요.">?</span></label>
           <input id="encryptKey" type="password" autocomplete="new-password" placeholder="예: KIM">
+          <button id="loadDemo" class="demo-button" type="button">발표용 예시 불러오기 <span>반복 데이터로 압축 효과 확인</span></button>
           <button id="encryptButton" class="primary-button"><span>암호화 시작</span><b>→</b></button>
           <p id="encryptStatus" class="status" aria-live="polite">준비 완료. 키와 데이터를 입력하세요.</p>
         </article>
@@ -60,8 +63,8 @@
           <div class="card-heading"><span class="section-index">B</span><div><h2>처리 현황</h2><p>이산수학 개념이 데이터에 적용됩니다.</p></div></div>
           <div class="process-list">
             <div id="processHuffman" class="process-item"><span>01</span><div><strong>허프만 코딩</strong><small>빈도 기반 접두어 없는 이진 코드</small></div><i>○</i></div>
-            <div id="processHash" class="process-item"><span>02</span><div><strong>SHA-256 키 확장</strong><small>입력 키 → 256비트 키</small></div><i>○</i></div>
-            <div id="processXor" class="process-item"><span>03</span><div><strong>XOR 암호화</strong><small>압축 데이터 ⊕ 확장 키</small></div><i>○</i></div>
+            <div id="processHash" class="process-item"><span>02</span><div><strong id="keyProcessTitle">PBKDF2 키 유도</strong><small id="keyProcessDetail">비밀 키 + random salt → AES-256 키</small></div><i>○</i></div>
+            <div id="processXor" class="process-item"><span>03</span><div><strong id="cipherProcessTitle">AES-GCM 인증 암호화</strong><small id="cipherProcessDetail">random IV · 암호화와 변조 검증</small></div><i>○</i></div>
             <div id="processReady" class="process-item"><span>04</span><div><strong>전송 패키지 생성</strong><small>.enc 컨테이너 저장</small></div><i>○</i></div>
           </div>
           <div id="hashDisplay" class="hash-display"><span>KEY DERIVATION</span><code>입력 키를 기다리는 중</code></div>
@@ -70,7 +73,7 @@
             <div><span>PACKAGE SIZE</span><strong id="packageSize">-</strong></div>
             <button id="downloadEnc" class="secondary-button">.enc 다운로드 <b>↓</b></button>
           </div>
-          <div id="uploadBox" class="upload-box hidden"><div><span>SERVER TRANSFER / CIPHERTEXT ONLY</span><strong>암호문을 공유 보관함에 올리기</strong><p>원본과 비밀 키는 이 브라우저를 벗어나지 않습니다.</p></div><label>표시 이름<input id="senderName" maxlength="24" placeholder="익명 (선택)"></label><label>보관 시간<select id="expiryHours"><option value="24">24시간</option><option value="72">3일</option><option value="168">7일</option></select></label><button id="uploadEnc" class="secondary-button">서버에 암호문 업로드 <b>↑</b></button><p id="uploadStatus" class="status">암호화 후 업로드할 수 있습니다.</p></div>
+          <div id="uploadBox" class="upload-box hidden"><div><span>SERVER TRANSFER / ENCRYPTED PACKAGE</span><strong>암호문을 공유 보관함에 올리기</strong><p>원본과 비밀 키는 이 브라우저를 벗어나지 않습니다. 단, 공유 시 `.enc` 암호문 패키지는 서버로 업로드됩니다.</p></div><label>표시 이름<input id="senderName" maxlength="24" placeholder="익명 (선택)"></label><label>보관 시간<select id="expiryHours"><option value="24">24시간</option><option value="72">3일</option><option value="168">7일</option></select></label><button id="uploadEnc" class="secondary-button">서버에 암호문 업로드 <b>↑</b></button><p id="uploadStatus" class="status">암호화 후 업로드할 수 있습니다.</p></div>
         </article>
       </div>
       <article class="card tree-card">
@@ -81,7 +84,7 @@
     </section>
 
     <section id="decrypt" class="panel">
-      <div class="steps decrypt-steps"><div class="step active"><b>01</b><span>파일 선택</span></div><div class="step-line"></div><div class="step"><b>02</b><span>XOR 복호화</span></div><div class="step-line"></div><div class="step"><b>03</b><span>압축 해제</span></div><div class="step-line"></div><div class="step"><b>04</b><span>원본 복원</span></div></div>
+      <div class="steps decrypt-steps"><div class="step active"><b>01</b><span>파일 선택</span></div><div class="step-line"></div><div class="step"><b>02</b><span>인증 복호화</span></div><div class="step-line"></div><div class="step"><b>03</b><span>압축 해제</span></div><div class="step-line"></div><div class="step"><b>04</b><span>원본 복원</span></div></div>
       <div class="work-grid">
         <article class="card input-card">
           <div class="card-heading"><span class="section-index">D</span><div><h2>받은 보안 파일</h2><p>Secure Message에서 만든 .enc 파일을 선택하세요.</p></div></div>
@@ -99,40 +102,13 @@
           <div id="recoveryResult" class="hidden"><div id="restoredInfo" class="restored-info"></div><pre id="restoredText"></pre><button id="downloadRestored" class="secondary-button">원본 파일 다운로드 <b>↓</b></button></div>
         </article>
       </div>
-      <aside class="xor-note"><b>BOOLEAN ALGEBRA / XOR의 자기역원 성질</b><span>A ⊕ K ⊕ K = A</span><p>같은 키로 XOR 연산을 한 번 더 하면 키가 상쇄되어 원래 압축 데이터가 복원됩니다.</p></aside>
+      <aside class="xor-note"><b>PACKAGE COMPATIBILITY / AES-GCM + LEGACY XOR</b><span>새 패키지: AES-256-GCM · 구버전: A ⊕ K ⊕ K = A</span><p>새 `.enc` 파일은 AES-GCM 인증 검증에 실패하면 복호화되지 않습니다. 기존 SME1 XOR 패키지는 이산수학 학습용 구버전으로만 읽을 수 있습니다.</p></aside>
     </section>
 
     <section id="inbox" class="panel">
-      <div class="route-intro"><p class="eyebrow">CIPHERTEXT STORAGE / SUPABASE</p><h2>공유된 <em>암호문 보관함</em>입니다.</h2><p>서버에는 암호화된 `.enc` 파일과 최소 메타데이터만 저장됩니다. 올바른 비밀 키가 있어야만 복호화할 수 있습니다.</p></div>
+      <div class="route-intro"><p class="eyebrow">CIPHERTEXT STORAGE / SUPABASE</p><h2>공유된 <em>암호문 보관함</em>입니다.</h2><p>서버에는 암호화된 `.enc` 파일과 표시 이름, 용량, 만료 시각이 저장됩니다. 올바른 비밀 키가 있어야만 내용을 복호화할 수 있습니다.</p></div>
       <article class="card inbox-card"><div class="card-heading"><span class="section-index">I</span><div><h2>받은 암호문</h2><p>만료되지 않은 암호문 패키지를 선택해 이 브라우저로 가져옵니다.</p></div><button id="refreshInbox" class="text-button">새로 고침</button></div><p id="inboxStatus" class="status">Supabase 연결을 설정한 뒤 보관함을 불러오세요.</p><div id="inboxList" class="inbox-list"><div class="inbox-empty">암호문 보관함을 불러오면 공유된 패키지가 표시됩니다.</div></div></article>
       <aside class="graph-note"><b>개인정보 보호</b><p>표시 이름은 선택 사항이며 기본값은 익명입니다. 서버는 원본 파일과 비밀 키를 저장하거나 복호화하지 않습니다.</p></aside>
-    </section>
-
-    <section id="route" class="panel">
-      <div class="route-intro"><p class="eyebrow">WEIGHTED GRAPH / DIJKSTRA ALGORITHM</p><h2>암호문이 갈 <em>최적의 경로</em>를 찾습니다.</h2><p>중계 서버는 정점, 서버 사이 연결은 간선입니다. 간선의 가중치를 전송 시간 또는 위험도로 두고 다익스트라 알고리즘이 최적 경로를 계산합니다.</p></div>
-      <div class="route-controls card">
-        <div class="route-control-heading"><span class="section-index">G</span><div><h3>전송 네트워크 모델</h3><p>정점 = 서버 · 간선 = 네트워크 연결 · 가중치 = 시간 또는 위험도</p></div></div>
-        <div class="route-form">
-          <label>최적화 기준<select id="routeMode"><option value="time">최단 시간 (ms)</option><option value="risk">최소 위험도 (점)</option></select></label>
-          <label>출발 서버<select id="routeStart"></select></label>
-          <label>도착 서버<select id="routeEnd"></select></label>
-          <button id="routeButton" class="primary-button"><span>다익스트라 경로 계산</span><b>→</b></button>
-        </div>
-        <p id="routeStatus" class="status">가중치 기준을 선택하고 최적 경로를 계산하세요.</p>
-      </div>
-      <div class="route-grid">
-        <article class="card network-card"><div class="card-heading"><span class="section-index">N</span><div><h2>중계 서버 그래프 <span class="tip" data-tip="선 위 숫자는 선택한 기준의 가중치입니다. 다익스트라는 가중치 합이 가장 작은 경로를 찾습니다.">?</span></h2><p>청록색 선은 최종 선택된 경로입니다.</p></div></div><div id="networkViewport" class="network-viewport"></div><div class="network-key"><span><i class="edge-normal"></i>연결 간선</span><span><i class="edge-route"></i>최적 경로</span><span><i class="node-visited"></i>탐색 완료</span></div></article>
-        <article class="card algorithm-card"><div class="card-heading"><span class="section-index">A</span><div><h2>다익스트라 진행 기록</h2><p><code>dist[v] = min(dist[v], dist[u] + w(u,v))</code></p></div></div><ol id="dijkstraSteps" class="dijkstra-steps"><li>경로 계산을 시작하면 정점 선택과 거리 갱신 과정이 표시됩니다.</li></ol><div id="routeResult" class="route-result hidden"></div><button id="simulateButton" class="secondary-button hidden">암호문 전송 시뮬레이션 <b>→</b></button></article>
-      </div>
-      <article class="card weight-editor">
-        <div class="card-heading"><span class="section-index">W</span><div><h2>간선 가중치 실험</h2><p>연결마다 전송 시간과 위험도를 직접 바꾼 뒤 다시 계산해 보세요. 가중치가 바뀌면 최적 경로도 달라질 수 있습니다.</p></div><button id="resetWeights" class="text-button">기본값 복원</button></div>
-        <div class="weight-table-wrap"><table class="weight-table"><thead><tr><th>연결 간선</th><th>전송 시간 (ms)</th><th>위험도 (1~10)</th></tr></thead><tbody id="weightTableBody"></tbody></table></div>
-      </article>
-      <article class="route-comparison card">
-        <div class="card-heading"><span class="section-index">C</span><div><h2>두 기준의 결과 비교</h2><p>같은 네트워크도 무엇을 비용으로 정의하느냐에 따라 다른 최적 경로가 나옵니다.</p></div><button id="compareRoutes" class="secondary-button">시간 · 위험도 비교 <b>↗</b></button></div>
-        <div id="comparisonResult" class="comparison-result">비교를 실행하면 시간 최소 경로와 위험도 최소 경로가 함께 표시됩니다.</div>
-      </article>
-      <aside class="graph-note"><b>왜 다익스트라인가?</b><p>모든 간선의 가중치가 0 이상일 때, 아직 방문하지 않은 정점 중 현재 비용이 가장 작은 정점을 확정하는 방식으로 출발지부터 각 서버까지의 최소 비용을 구할 수 있습니다.</p></aside>
     </section>
 
     <section id="analysis" class="panel">
@@ -140,8 +116,8 @@
       <div id="analysisEmpty" class="analysis-empty">먼저 <button data-open-tab="encrypt">암호화</button>를 실행해 분석 데이터를 생성하세요.</div>
       <div id="analysisContent" class="hidden">
         <div class="chart-grid"><article class="card chart-card"><div class="chart-title"><span>01</span><h3>원본 vs 암호문</h3></div><canvas id="mainDistribution"></canvas><p>원본의 규칙적인 분포가 암호화 후 넓게 분산되는지 비교합니다.</p></article><article class="card chart-card"><div class="chart-title"><span>02</span><h3>키 반복 방식 비교</h3></div><canvas id="keyDistribution"></canvas><p>짧은 키의 단순 반복은 주기적 패턴을 남길 수 있습니다.</p></article></div>
-        <article class="security-explanation"><div><b>WHY HASH THE KEY?</b><h3>짧은 키를 그대로 반복하지 않습니다.</h3></div><p>단순 반복 키는 같은 위치마다 같은 XOR 값이 적용되어 구조적 흔적을 남깁니다. SHA-256 해시는 입력을 32바이트 키 재료로 바꿔 반복 주기를 길게 합니다. 단, 짧은 비밀번호 자체의 추측 가능성을 없애는 것은 아니며 이 구현은 XOR 원리 학습용입니다.</p></article>
-        <article class="case-study"><p class="eyebrow">REAL-WORLD CONNECTIONS</p><h2>교과 개념이 실제 기술에서 쓰이는 곳</h2><div class="case-grid"><div><b>01 / 허프만 트리</b><h3>ZIP · PNG 압축</h3><p>자주 나타나는 데이터를 짧게 표현해 저장 공간과 전송량을 줄이는 무손실 압축의 핵심 원리입니다.</p></div><div><b>02 / XOR 연산</b><h3>스트림 암호의 기초</h3><p>키 스트림과 데이터를 XOR해 기밀성을 만드는 비트 연산입니다. 이 프로그램은 원리를 학습하는 교육용 구현입니다.</p></div><div><b>03 / 다익스트라</b><h3>내비게이션 · 인터넷 라우팅</h3><p>도로의 시간 또는 네트워크 연결 비용을 더해 가장 비용이 작은 경로를 찾는 데 사용됩니다.</p></div></div><p class="education-note">보안 한계 안내: SHA-256으로 만든 32바이트 키를 반복 XOR하는 방식은 이산수학 학습용입니다. 실제 서비스는 매 전송마다 다른 nonce/IV와 AES-GCM 같은 검증된 인증 암호를 사용해야 합니다.</p></article>
+        <article class="security-explanation"><div><b>WHY PBKDF2 + AES-GCM?</b><h3>비밀 키를 바로 반복하지 않고, 암호화와 변조 검증을 함께 합니다.</h3></div><p>기본 모드는 매번 새 salt로 PBKDF2-SHA-256을 250,000회 적용해 AES-256 키를 유도하고, 새 IV로 AES-GCM 암호화를 수행합니다. AES-GCM은 암호문과 패키지 메타데이터가 바뀌면 인증 검증에 실패합니다. 그래프의 XOR 비교는 보안 방식이 아닌 학습 실험입니다.</p></article>
+        <article class="case-study"><p class="eyebrow">REAL-WORLD CONNECTIONS</p><h2>구현에 적용한 개념과 실제 사례</h2><div class="case-grid"><div><b>01 / 허프만 트리</b><h3>ZIP · PNG 압축</h3><p>자주 나타나는 데이터를 짧게 표현해 저장 공간과 전송량을 줄이는 무손실 압축의 핵심 원리입니다.</p></div><div><b>02 / AES-GCM</b><h3>HTTPS · 파일 암호화</h3><p>현대 웹 보안에서 기밀성과 변조 검증을 함께 제공하는 인증 암호 방식입니다.</p></div><div><b>03 / XOR</b><h3>스트림 암호의 비트 연산</h3><p>평문과 키 스트림을 결합하는 XOR 원리를 비교합니다. 이 앱에서는 기본 암호가 아닌 원리 확인용 모드입니다.</p></div></div><p class="education-note">학습용 XOR 모드 안내: SHA-256 결과를 반복 XOR하는 방식은 실제 보안용이 아닙니다. 기본 AES-GCM 모드를 사용하고, 비밀 키에는 충분히 긴 암호문을 사용하세요.</p></article>
       </div>
     </section>
   </main>

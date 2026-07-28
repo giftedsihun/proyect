@@ -70,14 +70,23 @@ function decompressHuffman(packed, bitLength, root, expectedLength) {
   return output;
 }
 
-// 부울대수: XOR은 같은 키를 두 번 적용하면 원래 값으로 돌아옵니다. A⊕K⊕K=A
+const PBKDF2_ITERATIONS = 250000;
+const AES_SALT_LENGTH = 16;
+const AES_IV_LENGTH = 12;
+
+// 학습 모드용 XOR은 기존 SME1 패키지를 읽을 때도 유지합니다.
 function xorBytes(data, key) { const result = new Uint8Array(data.length); for (let i = 0; i < data.length; i++) result[i] = data[i] ^ key[i % key.length]; return result; }
-async function deriveKey(password) { return new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(password))); }
+async function deriveLegacyKey(password) { return new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(password))); }
+async function deriveAesKey(password, salt, iterations = PBKDF2_ITERATIONS) {
+  const material = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+function randomBytes(length) { const bytes = new Uint8Array(length); crypto.getRandomValues(bytes); return bytes; }
 async function sha256(data) { return new Uint8Array(await crypto.subtle.digest('SHA-256', data)); }
 function hex(bytes) { return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join(''); }
 function equalBytes(a, b) { return a.length === b.length && a.every((value, index) => value === b[index]); }
 
-function makePackage(meta, frequencies, bitLength, encrypted, integrity) {
+function makeLegacyPackage(meta, frequencies, bitLength, encrypted, integrity) {
   const name = encoder.encode(meta.name), mime = encoder.encode(meta.mime || 'application/octet-stream');
   const headerLength = 4 + 2 + 2 + 4 + 4 + 256 * 4 + 32 + name.length + mime.length;
   const output = new Uint8Array(headerLength + encrypted.length), view = new DataView(output.buffer);
@@ -88,8 +97,21 @@ function makePackage(meta, frequencies, bitLength, encrypted, integrity) {
   output.set(integrity, offset); offset += 32; output.set(name, offset); offset += name.length; output.set(mime, offset); offset += mime.length; output.set(encrypted, offset);
   return output;
 }
-function parsePackage(bytes) {
-  if (bytes.length < 1072 || String.fromCharCode(...bytes.slice(0, 4)) !== 'SME1') throw new Error('Secure Message .enc 파일이 아닙니다.');
+function makeAesHeader(meta, frequencies, bitLength, salt, iv) {
+  const name = encoder.encode(meta.name), mime = encoder.encode(meta.mime || 'application/octet-stream');
+  const headerLength = 4 + 2 + 2 + 4 + 4 + 4 + AES_SALT_LENGTH + AES_IV_LENGTH + 256 * 4 + name.length + mime.length;
+  const header = new Uint8Array(headerLength), view = new DataView(header.buffer);
+  header.set([0x53, 0x4d, 0x45, 0x32]); let offset = 4;
+  view.setUint16(offset, name.length); offset += 2; view.setUint16(offset, mime.length); offset += 2;
+  view.setUint32(offset, meta.size); offset += 4; view.setUint32(offset, bitLength); offset += 4; view.setUint32(offset, PBKDF2_ITERATIONS); offset += 4;
+  header.set(salt, offset); offset += AES_SALT_LENGTH; header.set(iv, offset); offset += AES_IV_LENGTH;
+  frequencies.forEach((freq, index) => view.setUint32(offset + index * 4, freq)); offset += 256 * 4;
+  header.set(name, offset); offset += name.length; header.set(mime, offset);
+  return header;
+}
+function makeAesPackage(header, encrypted) { const output = new Uint8Array(header.length + encrypted.length); output.set(header); output.set(encrypted, header.length); return output; }
+function parseLegacyPackage(bytes) {
+  if (bytes.length < 1072 || String.fromCharCode(...bytes.slice(0, 4)) !== 'SME1') throw new Error('지원하지 않는 보안 패키지입니다.');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength); let offset = 4;
   const nameLength = view.getUint16(offset); offset += 2; const mimeLength = view.getUint16(offset); offset += 2;
   const originalSize = view.getUint32(offset); offset += 4; const bitLength = view.getUint32(offset); offset += 4;
@@ -100,7 +122,27 @@ function parsePackage(bytes) {
   const mime = decoder.decode(bytes.slice(offset, offset + mimeLength)); offset += mimeLength;
   const encrypted = bytes.slice(offset);
   if (!encrypted.length || !frequencies.some(Boolean)) throw new Error('암호화된 본문이 없습니다.');
-  return { name, mime, originalSize, bitLength, frequencies, integrity, encrypted };
+  return { version: 'SME1', name, mime, originalSize, bitLength, frequencies, integrity, encrypted };
+}
+function parseAesPackage(bytes) {
+  const minimumLength = 4 + 2 + 2 + 4 + 4 + 4 + AES_SALT_LENGTH + AES_IV_LENGTH + 1024 + 16;
+  if (bytes.length < minimumLength || String.fromCharCode(...bytes.slice(0, 4)) !== 'SME2') throw new Error('지원하지 않는 보안 패키지입니다.');
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength); let offset = 4;
+  const nameLength = view.getUint16(offset); offset += 2; const mimeLength = view.getUint16(offset); offset += 2;
+  const originalSize = view.getUint32(offset); offset += 4; const bitLength = view.getUint32(offset); offset += 4; const iterations = view.getUint32(offset); offset += 4;
+  if (originalSize > MAX_SIZE || bitLength > MAX_SIZE * 16 || iterations < 100000 || iterations > 1000000 || offset + AES_SALT_LENGTH + AES_IV_LENGTH + 1024 + nameLength + mimeLength + 16 > bytes.length) throw new Error('파일 헤더가 올바르지 않거나 지원 크기를 초과합니다.');
+  const salt = bytes.slice(offset, offset + AES_SALT_LENGTH); offset += AES_SALT_LENGTH; const iv = bytes.slice(offset, offset + AES_IV_LENGTH); offset += AES_IV_LENGTH;
+  const frequencies = new Uint32Array(256); for (let i = 0; i < 256; i++) frequencies[i] = view.getUint32(offset + i * 4); offset += 1024;
+  const name = decoder.decode(bytes.slice(offset, offset + nameLength)); offset += nameLength; const mime = decoder.decode(bytes.slice(offset, offset + mimeLength)); offset += mimeLength;
+  const encrypted = bytes.slice(offset);
+  if (!frequencies.some(Boolean)) throw new Error('압축 정보가 없습니다.');
+  return { version: 'SME2', name, mime, originalSize, bitLength, iterations, salt, iv, frequencies, encrypted, aad: bytes.slice(0, offset) };
+}
+function parsePackage(bytes) {
+  const magic = String.fromCharCode(...bytes.slice(0, 4));
+  if (magic === 'SME2') return parseAesPackage(bytes);
+  if (magic === 'SME1') return parseLegacyPackage(bytes);
+  throw new Error('Secure Message .enc 파일이 아닙니다.');
 }
 
 function setProcess(id, state) { const element = $(id); element.classList.remove('working', 'done'); if (state) element.classList.add(state); element.querySelector('i').textContent = state === 'done' ? '●' : state === 'working' ? '◌' : '○'; }
@@ -111,9 +153,26 @@ function sourceFromInput() {
   if (!text.trim()) return Promise.reject(new Error('텍스트를 입력하거나 파일을 선택하세요.'));
   return Promise.resolve({ bytes: encoder.encode(text), name: 'secure-message.txt', mime: 'text/plain;charset=utf-8' });
 }
+function loadDemoMessage() {
+  $('#sourceFile').value = '';
+  $('#messageInput').value = '이산수학으로 안전하게 보낸 메시지입니다.\n\n허프만 트리는 자주 반복되는 데이터를 더 짧게 표현합니다.\n허프만 트리는 자주 반복되는 데이터를 더 짧게 표현합니다.\n허프만 트리는 자주 반복되는 데이터를 더 짧게 표현합니다.\n\nXOR 비트 연산과 바이트 분포도 함께 확인해 보세요.';
+  $('#encryptKey').value = 'MATH-2026';
+  $('#sourceMeta').textContent = '발표용 예시 텍스트 · 반복 데이터 포함 · 키: MATH-2026';
+  setStatus('#encryptStatus', '발표용 예시를 불러왔습니다. 암호화 후 트리와 압축률을 확인하세요.', 'success');
+}
+function updateEncryptionMode() {
+  const isAes = $('#encryptionMode').value === 'aes';
+  $('#modeNotice').innerHTML = isAes
+    ? '<b>권장 모드</b> 매 암호화마다 새 salt와 IV를 만들고, AES-GCM으로 암호화와 변조 검증을 함께 수행합니다.'
+    : '<b>학습 모드</b> SHA-256 결과를 반복 XOR합니다. 같은 키의 반복 사용과 키 추측에 취약하므로 실제 파일 보호에는 사용하지 마세요.';
+  $('#keyProcessTitle').textContent = isAes ? 'PBKDF2 키 유도' : 'SHA-256 키 재료 생성';
+  $('#keyProcessDetail').textContent = isAes ? '비밀 키 + random salt → AES-256 키' : '입력 키 → 32바이트 키 재료';
+  $('#cipherProcessTitle').textContent = isAes ? 'AES-GCM 인증 암호화' : 'XOR 암호화 (학습용)';
+  $('#cipherProcessDetail').textContent = isAes ? 'random IV · 암호화와 변조 검증' : '압축 데이터 ⊕ 반복 키 재료';
+}
 
 async function encrypt() {
-  const button = $('#encryptButton'), keyText = $('#encryptKey').value;
+  const button = $('#encryptButton'), keyText = $('#encryptKey').value, mode = $('#encryptionMode').value;
   if (!keyText) return setStatus('#encryptStatus', '비밀 키를 입력하세요.', 'error');
   button.disabled = true; $('#resultBox').classList.add('hidden');
   try {
@@ -121,16 +180,28 @@ async function encrypt() {
     setStatus('#encryptStatus', '바이트 빈도를 계산하고 허프만 트리를 생성하는 중...'); setProcess('#processHuffman', 'working'); updateSteps($('#encrypt .steps'), 2); await sleep(250);
     const frequencies = frequencyTable(source.bytes), root = buildHuffman(frequencies), codes = makeCodes(root), compressed = compressHuffman(source.bytes, codes);
     renderTree(root, codes); setProcess('#processHuffman', 'done'); $('#treeNote').textContent = `${frequencies.filter(Boolean).length}개 바이트 종류 · ${compressed.bitLength.toLocaleString()} bits`;
-    setStatus('#encryptStatus', 'SHA-256으로 키를 256비트로 확장하는 중...'); setProcess('#processHash', 'working'); updateSteps($('#encrypt .steps'), 3);
-    const key = await deriveKey(keyText); $('#hashDisplay code').textContent = `${keyText} → SHA-256 → ${hex(key).slice(0, 32)}... (32 bytes)`; setProcess('#processHash', 'done'); await sleep(180);
-    setStatus('#encryptStatus', '압축 데이터에 XOR 암호화를 적용하는 중...'); setProcess('#processXor', 'working');
-    const encrypted = xorBytes(compressed.packed, key), integrity = await sha256(source.bytes); setProcess('#processXor', 'done');
-    encryptedPackage = makePackage({ ...source, size: source.bytes.length }, frequencies, compressed.bitLength, encrypted, integrity); setProcess('#processReady', 'done'); updateSteps($('#encrypt .steps'), 4);
+    let encrypted, packageVersion;
+    setProcess('#processHash', 'working'); updateSteps($('#encrypt .steps'), 3);
+    if (mode === 'aes') {
+      const salt = randomBytes(AES_SALT_LENGTH), iv = randomBytes(AES_IV_LENGTH);
+      setStatus('#encryptStatus', `PBKDF2-SHA-256 ${PBKDF2_ITERATIONS.toLocaleString()}회로 AES-256 키를 유도하는 중...`);
+      const key = await deriveAesKey(keyText, salt); $('#hashDisplay code').textContent = `비밀 키 + salt ${hex(salt).slice(0, 12)}... → PBKDF2-SHA-256 (${PBKDF2_ITERATIONS.toLocaleString()}회) → AES-256`; setProcess('#processHash', 'done');
+      setStatus('#encryptStatus', '새 IV로 AES-GCM 인증 암호화를 적용하는 중...'); setProcess('#processXor', 'working');
+      const header = makeAesHeader({ ...source, size: source.bytes.length }, frequencies, compressed.bitLength, salt, iv);
+      encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: header, tagLength: 128 }, key, compressed.packed));
+      encryptedPackage = makeAesPackage(header, encrypted); packageVersion = 'SME2 / AES-256-GCM';
+    } else {
+      setStatus('#encryptStatus', 'SHA-256으로 학습용 XOR 키 재료를 만드는 중...');
+      const key = await deriveLegacyKey(keyText); $('#hashDisplay code').textContent = `${keyText} → SHA-256 → ${hex(key).slice(0, 32)}... (학습용 32 bytes)`; setProcess('#processHash', 'done');
+      setStatus('#encryptStatus', '압축 데이터에 학습용 XOR 연산을 적용하는 중...'); setProcess('#processXor', 'working');
+      encrypted = xorBytes(compressed.packed, key); encryptedPackage = makeLegacyPackage({ ...source, size: source.bytes.length }, frequencies, compressed.bitLength, encrypted, await sha256(source.bytes)); packageVersion = 'SME1 / LEGACY XOR';
+    }
+    setProcess('#processXor', 'done'); setProcess('#processReady', 'done'); updateSteps($('#encrypt .steps'), 4);
     const ratio = (1 - compressed.packed.length / source.bytes.length) * 100;
     $('#compressionText').textContent = `${bytesLabel(source.bytes.length)} → ${bytesLabel(compressed.packed.length)} (${ratio >= 0 ? ratio.toFixed(1) : '+' + Math.abs(ratio).toFixed(1)}%)`;
-    $('#packageSize').textContent = bytesLabel(encryptedPackage.length); $('#resultBox').classList.remove('hidden'); $('#uploadBox').classList.remove('hidden');
-    analysisData = { original: source.bytes, encrypted, simple: xorBytes(compressed.packed, encoder.encode(keyText)), hashed: encrypted }; renderAnalysis();
-    setStatus('#encryptStatus', '완료! .enc 파일을 다운로드해 안전하게 전달하세요.', 'success');
+    $('#packageSize').textContent = `${bytesLabel(encryptedPackage.length)} · ${packageVersion}`; $('#resultBox').classList.remove('hidden'); $('#uploadBox').classList.remove('hidden');
+    const legacyKey = await deriveLegacyKey(keyText); analysisData = { original: source.bytes, encrypted, cipherLabel: mode === 'aes' ? 'AES-GCM 암호문' : 'SHA-256 XOR 암호문', simple: xorBytes(compressed.packed, encoder.encode(keyText)), hashed: xorBytes(compressed.packed, legacyKey) }; renderAnalysis();
+    setStatus('#encryptStatus', mode === 'aes' ? '완료! AES-GCM 인증 암호문 .enc 파일을 다운로드해 전달하세요.' : '완료! 학습용 XOR .enc 파일을 만들었습니다. 실제 보호에는 AES-GCM 모드를 사용하세요.', mode === 'aes' ? 'success' : 'error');
   } catch (error) { setStatus('#encryptStatus', error.message, 'error'); }
   button.disabled = false;
 }
@@ -179,14 +250,23 @@ function renderTree(root, codes) {
 
 async function decrypt() {
   const file = $('#encryptedFile').files[0], keyText = $('#decryptKey').value, button = $('#decryptButton');
-  if (!file) return setStatus('#decryptStatus', '.enc 파일을 선택하세요.', 'error'); if (!keyText) return setStatus('#decryptStatus', '암호화에 사용한 비밀 키를 입력하세요.', 'error'); if (file.size > MAX_SIZE + 2048) return setStatus('#decryptStatus', '지원 크기(원본 25MB)를 초과한 파일입니다.', 'error');
+  if (!file) return setStatus('#decryptStatus', '.enc 파일을 선택하세요.', 'error'); if (!keyText) return setStatus('#decryptStatus', '암호화에 사용한 비밀 키를 입력하세요.', 'error'); if (file.size > MAX_SIZE + 140000) return setStatus('#decryptStatus', '지원 크기(원본 25MB)를 초과한 파일입니다.', 'error');
   button.disabled = true; try {
     setStatus('#decryptStatus', '보안 패키지를 읽는 중...'); const pack = parsePackage(new Uint8Array(await file.arrayBuffer())); updateSteps($('#decrypt .steps'), 2);
-    setStatus('#decryptStatus', 'SHA-256 키로 XOR 복호화하는 중...'); const key = await deriveKey(keyText), compressed = xorBytes(pack.encrypted, key); updateSteps($('#decrypt .steps'), 3);
-    setStatus('#decryptStatus', '허프만 트리로 원본을 복원하고 검증하는 중...'); const output = decompressHuffman(compressed, pack.bitLength, buildHuffman(pack.frequencies), pack.originalSize); const digest = await sha256(output);
-    if (!equalBytes(digest, pack.integrity)) throw new Error('무결성 검증에 실패했습니다. 키가 틀렸거나 파일이 손상되었습니다.');
-    restoredFile = { bytes: output, name: pack.name || 'restored-file', mime: pack.mime }; $('#recoveryEmpty').classList.add('hidden'); $('#recoveryResult').classList.remove('hidden'); $('#restoredInfo').textContent = `RESTORED / ${pack.name} / ${bytesLabel(output.length)} / SHA-256 VERIFIED`;
-    const isText = pack.mime.startsWith('text/') || /\.(txt|csv|json|md|html|js|css)$/i.test(pack.name); $('#restoredText').classList.toggle('hidden', !isText); if (isText) $('#restoredText').textContent = decoder.decode(output); updateSteps($('#decrypt .steps'), 4); setStatus('#decryptStatus', '복원 완료! 무결성 검증을 통과했습니다.', 'success');
+    let compressed, verification;
+    if (pack.version === 'SME2') {
+      setStatus('#decryptStatus', `PBKDF2-SHA-256 ${pack.iterations.toLocaleString()}회로 키를 유도하고 AES-GCM 인증을 검증하는 중...`);
+      const key = await deriveAesKey(keyText, pack.salt, pack.iterations);
+      try { compressed = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: pack.iv, additionalData: pack.aad, tagLength: 128 }, key, pack.encrypted)); } catch { throw new Error('AES-GCM 인증 검증에 실패했습니다. 비밀 키가 틀렸거나 파일 또는 헤더가 변경되었습니다.'); }
+      verification = 'AES-GCM AUTHENTICATED';
+    } else {
+      setStatus('#decryptStatus', '학습용 SME1 패키지를 SHA-256 반복 XOR로 복호화하는 중...');
+      compressed = xorBytes(pack.encrypted, await deriveLegacyKey(keyText)); verification = 'LEGACY SHA-256 VERIFIED';
+    }
+    updateSteps($('#decrypt .steps'), 3); setStatus('#decryptStatus', '허프만 트리로 원본을 복원하는 중...'); const output = decompressHuffman(compressed, pack.bitLength, buildHuffman(pack.frequencies), pack.originalSize);
+    if (pack.version === 'SME1' && !equalBytes(await sha256(output), pack.integrity)) throw new Error('무결성 검증에 실패했습니다. 키가 틀렸거나 파일이 손상되었습니다.');
+    restoredFile = { bytes: output, name: pack.name || 'restored-file', mime: pack.mime }; $('#recoveryEmpty').classList.add('hidden'); $('#recoveryResult').classList.remove('hidden'); $('#restoredInfo').textContent = `RESTORED / ${pack.name} / ${bytesLabel(output.length)} / ${verification}`;
+    const isText = pack.mime.startsWith('text/') || /\.(txt|csv|json|md|html|js|css)$/i.test(pack.name); $('#restoredText').classList.toggle('hidden', !isText); if (isText) $('#restoredText').textContent = decoder.decode(output); updateSteps($('#decrypt .steps'), 4); setStatus('#decryptStatus', pack.version === 'SME2' ? '복원 완료! AES-GCM 인증 검증을 통과했습니다.' : '복원 완료! 학습용 SME1 XOR 패키지의 SHA-256 검증을 통과했습니다.', 'success');
   } catch (error) { updateSteps($('#decrypt .steps'), 1); setStatus('#decryptStatus', error.message || '복호화에 실패했습니다. 키를 확인하세요.', 'error'); }
   button.disabled = false;
 }
@@ -199,87 +279,16 @@ function drawDistribution(canvasId, datasets) {
   const barWidth = graphW / 256; counts.forEach((table, setIndex) => { ctx.fillStyle = datasets[setIndex].color; for (let i = 0; i < 256; i++) { const h = table[i] / max * graphH; ctx.fillRect(pad.left + i * barWidth + (setIndex ? barWidth * .42 : 0), pad.top + graphH - h, Math.max(.7, barWidth * .46), h); } });
   ctx.fillStyle = '#7693a0'; [0, 64, 128, 192, 255].forEach((value) => ctx.fillText(value, pad.left + graphW * value / 255 - 5, height - 9)); let legendX = pad.left; datasets.forEach((set) => { ctx.fillStyle = set.color; ctx.fillRect(legendX, 9, 8, 8); ctx.fillStyle = '#c5dcda'; ctx.fillText(set.label, legendX + 12, 16); legendX += ctx.measureText(set.label).width + 32; });
 }
-function renderAnalysis() { if (!analysisData) return; $('#analysisEmpty').classList.add('hidden'); $('#analysisContent').classList.remove('hidden'); requestAnimationFrame(() => { drawDistribution('#mainDistribution', [{ label: '원본', data: analysisData.original, color: '#e9c76d' }, { label: 'SHA-256 XOR 암호문', data: analysisData.encrypted, color: '#55e6cf' }]); drawDistribution('#keyDistribution', [{ label: '단순 반복 키', data: analysisData.simple, color: '#ff7e72' }, { label: 'SHA-256 확장 키', data: analysisData.hashed, color: '#55e6cf' }]); }); }
+function renderAnalysis() { if (!analysisData) return; $('#analysisEmpty').classList.add('hidden'); $('#analysisContent').classList.remove('hidden'); requestAnimationFrame(() => { drawDistribution('#mainDistribution', [{ label: '원본', data: analysisData.original, color: '#e9c76d' }, { label: analysisData.cipherLabel, data: analysisData.encrypted, color: '#55e6cf' }]); drawDistribution('#keyDistribution', [{ label: '단순 반복 키', data: analysisData.simple, color: '#ff7e72' }, { label: 'SHA-256 확장 키', data: analysisData.hashed, color: '#55e6cf' }]); }); }
 function download(bytes, name, mime) { const url = URL.createObjectURL(new Blob([bytes], { type: mime })); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
-
-// 그래프: 서버=정점, 연결=간선, 시간/위험도=음이 아닌 가중치로 모델링합니다.
-const networkNodes = [
-  { id: 'sender', name: '나', sub: '송신자', x: 70, y: 205 },
-  { id: 'seoul', name: '서울 게이트웨이', sub: '보안 노드', x: 220, y: 105 },
-  { id: 'daejeon', name: '대전 릴레이', sub: '중계 서버', x: 330, y: 290 },
-  { id: 'incheon', name: '인천 보안 노드', sub: '중계 서버', x: 425, y: 95 },
-  { id: 'busan', name: '부산 릴레이', sub: '중계 서버', x: 500, y: 290 },
-  { id: 'gwangju', name: '광주 릴레이', sub: '중계 서버', x: 620, y: 185 },
-  { id: 'receiver', name: '상대방', sub: '수신자', x: 750, y: 195 }
-];
-const networkEdges = [
-  ['sender', 'seoul', 12, 3], ['sender', 'daejeon', 20, 2], ['seoul', 'daejeon', 11, 5], ['seoul', 'incheon', 9, 2],
-  ['daejeon', 'incheon', 16, 4], ['daejeon', 'busan', 13, 2], ['incheon', 'busan', 14, 5], ['incheon', 'gwangju', 18, 1],
-  ['busan', 'gwangju', 10, 3], ['busan', 'receiver', 23, 2], ['gwangju', 'receiver', 8, 4]
-].map(([from, to, time, risk]) => ({ from, to, time, risk }));
-const defaultNetworkWeights = networkEdges.map(({ time, risk }) => ({ time, risk }));
-let routeState = { path: [], visited: [], result: null, mode: 'time' };
-function nodeById(id) { return networkNodes.find((node) => node.id === id); }
-function edgeKey(a, b) { return [a, b].sort().join('|'); }
-
-// 다익스트라: 최소 우선순위 큐에서 가장 비용이 작은 미방문 정점을 꺼내 거리를 갱신합니다.
-function dijkstra(start, end, weightField) {
-  const distances = Object.fromEntries(networkNodes.map((node) => [node.id, Infinity]));
-  const previous = {}, visited = [], steps = [], queue = new MinHeap(); distances[start] = 0; queue.push({ id: start, freq: 0 });
-  while (queue.length) {
-    const current = queue.pop(); if (current.freq !== distances[current.id]) continue;
-    visited.push(current.id); steps.push(`${nodeById(current.id).name} 선택: 현재 ${weightField === 'time' ? '시간' : '위험도'} ${current.freq}`);
-    if (current.id === end) break;
-    networkEdges.filter((edge) => edge.from === current.id || edge.to === current.id).forEach((edge) => {
-      const neighbor = edge.from === current.id ? edge.to : edge.from, candidate = current.freq + edge[weightField];
-      if (candidate < distances[neighbor]) { const old = distances[neighbor]; distances[neighbor] = candidate; previous[neighbor] = current.id; queue.push({ id: neighbor, freq: candidate }); steps.push(`  ${nodeById(neighbor).name}: ${old === Infinity ? '∞' : old} → ${candidate} (${nodeById(current.id).name} 경유)`); }
-    });
-  }
-  const path = []; for (let cursor = end; cursor; cursor = previous[cursor]) { path.unshift(cursor); if (cursor === start) break; }
-  if (path[0] !== start) return { path: [], visited, steps, cost: Infinity };
-  return { path, visited, steps, cost: distances[end] };
-}
-function renderNetwork() {
-  const selectedEdges = new Set(routeState.path.slice(1).map((id, index) => edgeKey(routeState.path[index], id)));
-  const { mode, visited, path } = routeState, start = $('#routeStart').value || 'sender', end = $('#routeEnd').value || 'receiver';
-  const edges = networkEdges.map((edge) => { const a = nodeById(edge.from), b = nodeById(edge.to), active = selectedEdges.has(edgeKey(edge.from, edge.to)); return `<line class="network-edge ${active ? 'route-edge' : ''}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/><text class="edge-weight" x="${(a.x + b.x) / 2}" y="${(a.y + b.y) / 2 - 7}">${edge[mode]}${mode === 'time' ? 'ms' : ''}</text>`; }).join('');
-  const nodes = networkNodes.map((node) => { const classes = ['network-node']; if (visited.includes(node.id)) classes.push('visited'); if (path.includes(node.id)) classes.push('route-node'); if (node.id === start || node.id === end) classes.push('start-end'); return `<circle class="${classes.join(' ')}" cx="${node.x}" cy="${node.y}" r="25"/><text class="server-label" x="${node.x}" y="${node.y - 35}">${node.name}</text><text class="server-sub" x="${node.x}" y="${node.y + 4}">${node.sub}</text>`; }).join('');
-  $('#networkViewport').innerHTML = `<svg class="network-svg" viewBox="0 0 820 390" aria-label="가중치 네트워크 그래프">${edges}${nodes}</svg>`;
-}
-function populateRouteSelects() { ['#routeStart', '#routeEnd'].forEach((selector) => { $(selector).innerHTML = networkNodes.map((node) => `<option value="${node.id}">${node.name} (${node.sub})</option>`).join(''); }); $('#routeStart').value = 'sender'; $('#routeEnd').value = 'receiver'; renderNetwork(); }
-function edgeName(edge) { return `${nodeById(edge.from).name} ↔ ${nodeById(edge.to).name}`; }
-function resetRouteView() { routeState = { path: [], visited: [], result: null, mode: $('#routeMode').value }; $('#routeResult').classList.add('hidden'); $('#simulateButton').classList.add('hidden'); $('#dijkstraSteps').innerHTML = '<li>가중치가 변경되었습니다. 다익스트라 경로를 다시 계산하세요.</li>'; renderNetwork(); }
-function renderWeightTable() {
-  $('#weightTableBody').innerHTML = networkEdges.map((edge, index) => `<tr><td>${edgeName(edge)}</td><td><input data-edge="${index}" data-weight="time" type="number" min="1" max="999" value="${edge.time}" aria-label="${edgeName(edge)} 전송 시간"></td><td><input data-edge="${index}" data-weight="risk" type="number" min="1" max="10" value="${edge.risk}" aria-label="${edgeName(edge)} 위험도"></td></tr>`).join('');
-  $('#weightTableBody').querySelectorAll('input').forEach((input) => input.addEventListener('change', () => { const value = Number(input.value), edge = networkEdges[Number(input.dataset.edge)], field = input.dataset.weight, max = field === 'risk' ? 10 : 999; edge[field] = Number.isFinite(value) ? Math.min(max, Math.max(1, Math.round(value))) : 1; input.value = edge[field]; resetRouteView(); }));
-}
-function compareRoutes() {
-  const start = $('#routeStart').value, end = $('#routeEnd').value;
-  if (start === end) return setStatus('#routeStatus', '출발 서버와 도착 서버는 다르게 선택하세요.', 'error');
-  const timeResult = dijkstra(start, end, 'time'), riskResult = dijkstra(start, end, 'risk');
-  const resultCard = (title, result, unit, extraClass = '') => `<div class="comparison-card ${extraClass}"><span>${title}</span><strong>${result.path.map((id) => nodeById(id).name).join(' → ')}</strong><small>총 비용: ${result.cost}${unit} · 방문 정점 ${result.visited.length}개</small></div>`;
-  $('#comparisonResult').innerHTML = resultCard('TIME / 최단 시간', timeResult, 'ms') + resultCard('RISK / 최소 위험도', riskResult, '점', 'risk');
-  setStatus('#routeStatus', '동일한 그래프에서 가중치 기준에 따라 두 최적 경로를 비교했습니다.', 'success');
-}
-function calculateRoute() {
-  const start = $('#routeStart').value, end = $('#routeEnd').value, mode = $('#routeMode').value;
-  if (start === end) return setStatus('#routeStatus', '출발 서버와 도착 서버는 다르게 선택하세요.', 'error');
-  const result = dijkstra(start, end, mode); routeState = { ...result, mode }; renderNetwork();
-  $('#dijkstraSteps').innerHTML = result.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('');
-  const metric = mode === 'time' ? '총 전송 시간' : '총 위험도'; $('#routeResult').innerHTML = `<span>DIJKSTRA RESULT / ${metric.toUpperCase()}</span><strong>${result.path.map((id) => nodeById(id).name).join(' → ')}</strong><small>${metric}: ${result.cost}${mode === 'time' ? 'ms' : '점'} · 방문 정점: ${result.visited.length}개</small>`; $('#routeResult').classList.remove('hidden'); $('#simulateButton').classList.remove('hidden'); setStatus('#routeStatus', `${metric} ${result.cost}${mode === 'time' ? 'ms' : '점'}의 경로를 찾았습니다.`, 'success');
-}
-function simulatePacket() {
-  if (!routeState.path.length) return; const svg = $('#networkViewport svg'); svg.querySelector('.packet')?.remove(); const points = routeState.path.map(nodeById).map((node) => `${node.x},${node.y}`).join(' ');
-  const packet = document.createElementNS('http://www.w3.org/2000/svg', 'circle'); packet.setAttribute('class', 'packet'); packet.setAttribute('r', '9'); packet.innerHTML = `<animateMotion dur="3s" repeatCount="1" path="M ${routeState.path.map((id) => { const node = nodeById(id); return `${node.x} ${node.y}`; }).join(' L ')}"/>`; svg.append(packet); setStatus('#routeStatus', encryptedPackage ? '암호화된 .enc 패킷이 최적 경로를 따라 이동합니다. 원문은 중계 서버에 표시되지 않습니다.' : '경로 시뮬레이션입니다. 암호화 후에는 .enc 패킷 전송으로 연결됩니다.', 'success');
-}
 
 document.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => { document.querySelectorAll('.tab,.panel').forEach((item) => item.classList.remove('active')); tab.classList.add('active'); $(`#${tab.dataset.tab}`).classList.add('active'); if (tab.dataset.tab === 'analysis') renderAnalysis(); if (tab.dataset.tab === 'inbox') loadInbox(); }));
 document.querySelectorAll('[data-open-tab]').forEach((button) => button.addEventListener('click', () => document.querySelector(`[data-tab="${button.dataset.openTab}"]`).click()));
 $('#sourceFile').addEventListener('change', (event) => { const file = event.target.files[0]; $('#sourceMeta').textContent = file ? `${file.name} · ${bytesLabel(file.size)}${file.size > MAX_SIZE ? ' · 크기 초과' : ''}` : '텍스트 입력을 기다리는 중'; });
 $('#encryptedFile').addEventListener('change', (event) => { const file = event.target.files[0]; $('#encryptedMeta').textContent = file ? `${file.name} · ${bytesLabel(file.size)}` : '보안 파일을 기다리는 중'; });
-$('#encryptButton').addEventListener('click', encrypt); $('#decryptButton').addEventListener('click', decrypt);
+$('#encryptionMode').addEventListener('change', updateEncryptionMode); $('#loadDemo').addEventListener('click', loadDemoMessage); $('#encryptButton').addEventListener('click', encrypt); $('#decryptButton').addEventListener('click', decrypt);
 $('#downloadEnc').addEventListener('click', () => { if (encryptedPackage) download(encryptedPackage, 'secure-message.enc', 'application/octet-stream'); });
 $('#downloadRestored').addEventListener('click', () => { if (restoredFile) download(restoredFile.bytes, restoredFile.name, restoredFile.mime); });
 $('#uploadEnc').addEventListener('click', uploadEncryptedPackage); $('#refreshInbox').addEventListener('click', loadInbox); $('#openInbox').addEventListener('click', () => document.querySelector('[data-tab="inbox"]').click());
-populateRouteSelects(); renderWeightTable(); $('#routeButton').addEventListener('click', calculateRoute); $('#simulateButton').addEventListener('click', simulatePacket); $('#compareRoutes').addEventListener('click', compareRoutes); $('#resetWeights').addEventListener('click', () => { networkEdges.forEach((edge, index) => Object.assign(edge, defaultNetworkWeights[index])); renderWeightTable(); resetRouteView(); setStatus('#routeStatus', '모든 간선 가중치를 기본값으로 복원했습니다.', 'success'); }); ['#routeMode', '#routeStart', '#routeEnd'].forEach((selector) => $(selector).addEventListener('change', resetRouteView));
+  updateEncryptionMode();
 window.addEventListener('resize', () => { if ($('#analysis').classList.contains('active')) renderAnalysis(); });
