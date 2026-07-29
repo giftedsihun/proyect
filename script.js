@@ -284,6 +284,26 @@ function download(bytes, name, mime) { const url = URL.createObjectURL(new Blob(
 
 document.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => { document.querySelectorAll('.tab,.panel').forEach((item) => item.classList.remove('active')); tab.classList.add('active'); $(`#${tab.dataset.tab}`).classList.add('active'); if (tab.dataset.tab === 'analysis') renderAnalysis(); if (tab.dataset.tab === 'inbox') loadInbox(); }));
 document.querySelectorAll('[data-open-tab]').forEach((button) => button.addEventListener('click', () => document.querySelector(`[data-tab="${button.dataset.openTab}"]`).click()));
+document.querySelectorAll('[data-password-toggle]').forEach((button) => button.addEventListener('click', () => {
+  const input = $(`#${button.dataset.passwordToggle}`);
+  const isHidden = input.type === 'password';
+  input.type = isHidden ? 'text' : 'password';
+  button.textContent = isHidden ? '숨김' : '표시';
+  button.setAttribute('aria-label', isHidden ? '비밀 키 숨기기' : '비밀 키 표시');
+}));
+function makeDropTarget(inputId) {
+  const input = $(inputId), dropTarget = input.closest('.file-drop');
+  ['dragenter', 'dragover'].forEach((eventName) => dropTarget.addEventListener(eventName, (event) => { event.preventDefault(); dropTarget.classList.add('dragging'); }));
+  ['dragleave', 'drop'].forEach((eventName) => dropTarget.addEventListener(eventName, (event) => { event.preventDefault(); dropTarget.classList.remove('dragging'); }));
+  dropTarget.addEventListener('drop', (event) => {
+    const file = event.dataTransfer.files[0];
+    if (!file) return;
+    const transfer = new DataTransfer(); transfer.items.add(file); input.files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+makeDropTarget('#sourceFile');
+makeDropTarget('#encryptedFile');
 $('#sourceFile').addEventListener('change', (event) => { const file = event.target.files[0]; $('#sourceMeta').textContent = file ? `${file.name} · ${bytesLabel(file.size)}${file.size > MAX_SIZE ? ' · 크기 초과' : ''}` : '텍스트 입력을 기다리는 중'; });
 $('#encryptedFile').addEventListener('change', (event) => { const file = event.target.files[0]; $('#encryptedMeta').textContent = file ? `${file.name} · ${bytesLabel(file.size)}` : '보안 파일을 기다리는 중'; });
 $('#encryptionMode').addEventListener('change', updateEncryptionMode); $('#loadDemo').addEventListener('click', loadDemoMessage); $('#encryptButton').addEventListener('click', encrypt); $('#decryptButton').addEventListener('click', decrypt);
